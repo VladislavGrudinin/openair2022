@@ -1,0 +1,590 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>reveal.js</title>
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<link rel="stylesheet" href="dist/theme/black.css">
+
+		<!-- Theme used for syntax highlighted code -->
+		<link rel="stylesheet" href="plugin/highlight/monokai.css">
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section data-background-color="rgb(6, 40, 70)">
+					<img style="margin-left: -640px;" width=300 src="img/unigine.png">
+					<h2 style="text-align: left; margin-top: 50px;">Обычные и необычные баги на C++</h2>
+					<p style="text-align: left; margin-top: 50px;">Владислав Грудинин</br> Программист инструментария, UNIGINE </p>
+				</section>
+				<section data-markdown>
+					План:
+					* Баги.
+					* Частые, страшные, ...
+					* И как с ними бороться.
+				</section>
+				<section data-markdown>
+					* Доклад интерактивный, садимся поближе!
+					* Если есть вопросы, лучше спрашивать сразу.
+				</section>
+				<section>Баг #1</br>
+					Висячие ссылки
+				</section>
+				<section data-markdown>
+					#### Продление жизни временным объектам.
+
+					Когда ссылка привязывается к временному объекту, время жизни объекта продлевается до времени жизни ссылки.
+				</section>
+				<section>
+					<p>Пример:</p>
+					<pre style="height: 500px;"><code data-trim data-line-numbers="|7|8|9|11|15" class="cpp"><script type="text/template">
+struct S {
+	int m;
+	int ma[10];
+	~S() { puts("destroyed the temporary S"); }
+};
+void test1() {
+	const S& b = S();
+	puts("lifetime-extension");
+}
+void test2() {
+	const int& b = S().m;
+	puts("lifetime-extension");
+}
+void test3() {
+	const int& b = S().ma[0];
+	puts("lifetime-extension");
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<img height=600 src="img/lifetime_extension.png">
+					<a href="https://godbolt.org/z/o3eqj45Yo">https://godbolt.org/z/o3eqj45Yo</a>
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers="|2|3|6|" class="cpp"><script type="text/template">
+// In String.h
+String extension()
+String &lower()
+
+// in *.cpp
+const String &extension = filename.extension().lower();
+					</script></code></pre>
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+// from std
+template<class T>
+const T &min(const T &a, const T &b);
+
+// in cpp
+const auto &min_value = std::min(x - 1, y);
+					</script></code></pre>
+					<p class="fragment" data-fragment-index="1">У нас можно не бояться</p>
+					<pre class="fragment" data-fragment-index="1"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+UNIGINE_INLINE dvec3 min(const dvec3 &v0, const dvec3 &v1)
+					</script></code></pre>
+				</section>
+				<section>
+					<img src="img/min.png">
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers="|3|5|6|7|10|11|" class="cpp"><script type="text/template">
+#include <map>
+void f() {
+	std::map<int, int> mp;
+	const int *p = nullptr;
+	for (const pair<int, int>& pr : mp) {
+		if (some_cond(pr.first)) {
+			p = &pr.second;
+		}
+	}
+	if (p) {
+		int x = *p;
+	}
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct StructWithVec {
+	Vector<int> numbers;
+};
+StructWithVec generate();
+
+for (const int x : generate().numbers) {
+	// use x
+}
+					</script></code></pre>
+					<p class="fragment">В какой момент у StructWithVec вызывается деструктор?</p>
+				</section>
+				<section>
+					<img src="img/for_loop.png">
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct StructWithVec {
+	Vector<int> numbers;
+	const Vector<int> &get_numbers() { return numbers; }
+};
+StructWithVec generate();
+
+for (const int x : generate().get_numbers()) {
+	// use x
+}
+					</script></code></pre>
+				</section>
+<!--				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct NodeInfo {
+	short parent;
+	Vector<short> chlidren;
+};
+short Manager::parse_node(Xml* x) {
+	short my_pos = node_infos.size();
+	NodeInfo my_info = node_infos.append();	
+	if (x->hasItem("node")) {
+		short children_num = parse_node(x->getItem("node"));
+		my_info.children.push_back(children_num);
+		node_infos[children_num] = children_num;
+	}
+	return my_pos;
+}
+					</script></code></pre>
+				</section>
+-->
+				<section>
+					Как бороться
+				</section>
+				<section data-auto-animate>
+					<p>Address sanitizer</p>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+int AppSystemLogic::init()
+{
+	const String filename{"abcdef.ext"};
+	const String &extension = filename.extension().lower();
+	Log::message("%s\n", extension.get());
+	return 1;
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>Address sanitizer</p>
+					<img src="img/asan.png">
+				</section>
+				<section data-auto-animate data-transition="none-out">
+					<p>Использовать auto</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers="|5" class="cpp"><script type="text/template">
+#include <map>
+void f() {
+	std::map<int, int> mp;
+	const int *p = nullptr;
+	for (const pair<int, int>& pr : mp) {
+		if (some_cond(pr.first)) {
+			p = &pr.second;
+		}
+	}
+	if (p) {
+		int x = *p;
+	}
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>Использовать auto</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers="5" class="cpp"><script type="text/template">
+#include <map>
+void f() {
+	std::map<int, int> mp;
+	const int *p = nullptr;
+	for (const auto &pr : mp) {
+		if (some_cond(pr.first)) {
+			p = &pr.second;
+		}
+	}
+	if (p) {
+		int x = *p;
+	}
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>Использовать structured bindings в C++17</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers="5|" class="cpp"><script type="text/template">
+#include <map>
+void f() {
+	std::map<int, int> mp;
+	const int *p = nullptr;
+	for (const auto &[key, value] : mp) {
+		if (some_cond(key)) {
+			p = &value;
+		}
+	}
+	if (p) {
+		int x = *p;
+	}
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>В С++20 в range-loop можно писать init-statement</p>
+					<pre data-id="code-animation-2"><code data-trim data-line-numbers="|7" class="cpp"><script type="text/template">
+struct StructWithVec {
+	Vector<int> numbers;
+	const Vector<int> &get_numbers() { return numbers; }
+};
+StructWithVec generate();
+
+for (const int x : generate().get_numbers()) {
+	// use x
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>В С++20 в range-loop можно писать init-statement</p>
+					<pre data-id="code-animation-2" style="width: 950px;"><code data-trim data-line-numbers="7|" class="cpp"><script type="text/template">
+struct StructWithVec {
+	Vector<int> numbers;
+	const Vector<int> &get_numbers() { return numbers; }
+};
+StructWithVec generate();
+
+for (const auto s = generate(); const int x : s.get_numbers()) {
+	// use x
+}
+					</script></code></pre>
+				</section>
+				<section data-transition="fade">
+					<p>Init-statement может быть пустой</p>
+					<pre><code data-trim class="cpp"><script type="text/template">
+for ( ; const int x : {1, 2, 3, 4, 5}) {
+}
+					</script></code></pre>
+				</section>
+				<section>Баг #2</br>
+					lock_guard/unique_lock
+				</section>
+				<section>
+					<p>Компилируется?</p>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+#include <string>
+void f() {
+	std::string(s);
+}
+					</script></code></pre>
+					<img class="fragment" src="img/yes.png" width="200">
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+#include <string>
+void f() {
+	std::string(s);
+	std::string("hmm");
+}
+					</script></code></pre>
+					<img class="fragment" src="img/yes.png" width="200">
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+#include <string>
+void f() {
+	std::string(s);
+	std::string(s);
+}
+					</script></code></pre>
+					<img class="fragment" src="img/no.png" width="200">
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+#include <string>
+void f() {
+	std::string(s);
+	std::string{s};
+}
+					</script></code></pre>
+					<img class="fragment" src="img/yes.png" width="200">
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers="|2|7|" class="cpp"><script type="text/template">
+void update() {
+	std::lock_guard<std::mutex> guard(this->mtx);
+	// critical section
+}
+
+void wait() {
+	std::unique_lock<std::mutex> lock(this->mtx);
+	// critical section and maybe pass lock somewhere else
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+void update() {
+	std::lock_guard<std::mutex>(this->mtx);
+	// critical section
+}
+
+void wait() {
+	std::unique_lock<std::mutex>(mtx);
+	// critical section and maybe pass lock somewhere else
+}
+					</script></code></pre>
+					<img class="fragment" src="img/yes.png" width="200">
+				</section>
+				<section data-markdown>
+					Как бороться:
+					* clang-tidy lints.
+					* -WShadow ???
+				</section>
+				<section>
+					<p>Бонус</p>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+auto (*fp)(int)->int(&foo);
+
+					</script></code></pre>
+					<img class="fragment" src="img/yes.png" width="200">
+				</section>
+				<section>Баг #3</br>
+					Map/HashMap operator[]	
+				</section>
+				<section>
+					<p>С одной стороны это удобно</p>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+void count_something() {
+	std::map<std::string, int> cnt;
+	for (const auto &key : get_data())
+	{
+		++cnt[key];
+	}
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>С другой стороны...</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct SomeStatistics {
+	// a lot of fields
+};
+struct ExpensiveToConstruct {
+	// Some vector with preallocated buffer
+	Vector<SomeStatistics> data;
+};
+void insert() {
+	// default value created and immediately destroyed
+	mp[key] = std::move(value);	
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<p>Лучше</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct SomeStatistics {
+	// a lot of fields
+};
+struct ExpensiveToConstruct {
+	// Some vector with preallocated buffer
+	Vector<SomeStatistics> data;
+};
+void insert() {
+	mp.emplace(std::move(key), std::move(value));
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate data-auto-animate-id="2">
+					<p>Можем поменять значение в хешмапе</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+const Data &Manager::GetData(int id) {
+	return this->id2data[id];
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate data-auto-animate-id="2">
+					<p>Лучше</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+const Data &Manager::GetData(int id) const {
+	return this->id2data.at(id);
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate data-auto-animate-id="1">
+					<p>2 поиска, вместо одного</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+const Data *Manager::GetData(int id) {
+	if (!this->id2data.contains(id)) {
+		return nullptr;
+	}
+	return this->id2data[id];
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate data-auto-animate-id="1">
+					<p>Лучше</p>
+					<pre data-id="code-animation"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+const Data *Manager::GetData(int id) const {
+	auto it = this->id2data.find(id);
+	if (it == this->id2data.end()) {
+		return nullptr;
+	}
+	return it->second;
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<p>Или даже сегфолт</p>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+// in h
+HashMap<NodePtr, NodeInfo> node2node_info;
+
+// in cpp
+some_usage(node2node_info[from], node2node_info[to]);
+					</script></code></pre>
+				</section>
+				<section data-markdown>
+					* Использовать insert/emplace для вставки вместо operator[].
+					* const correctness + at()/find() + end() для получения/проверки вхождения.
+				</section>
+				<section>Баг #4</br>
+					Опасности в шаблонном коде.
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers="|3|7|" class="cpp"><script type="text/template">
+template <typename T, typename... Args>
+T* MakePtr(Args&&... args) {
+    return new T(std::forward<Args>(args)...);
+}
+template <typename T, typename... Args>
+T* MakePtr(Args&&... args) {
+    return new T{std::forward<Args>(args)...};
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct Test {
+	Test(float x);
+};
+
+template <typename T, typename... Args>
+T* MakePtr(Args&&... args) {
+    return new T{std::forward<Args>(args)...};
+}
+
+void foo(int x) {
+	// error: non-constant-expression cannot be narrowed
+	// from type 'int' to 'float' in initializer list
+	auto p = MakePtr<Test>(x);
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<pre data-id="code-animation" style="height: 450px"><code data-trim data-line-numbers="|13|" class="cpp"><script type="text/template">
+struct Test {
+	Test(int x, int y) { puts("Constructor with 2 ints"); }
+	Test(std::initializer_list<int>) {
+		puts("Constructor with initializer_list");
+	}
+};
+template <typename T, typename... Args>
+T* MakePtr(Args&&... args) {
+    return new T{std::forward<Args>(args)...};
+}
+
+void foo() {
+	auto p = MakePtr<Test>(1, 2);
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate>
+					<pre data-id="code-animation" style="height: 450px"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+struct Test {
+	Test(int x, int y) { puts("Constructor with 2 ints"); }
+	Test(std::initializer_list<int>) {
+		puts("Constructor with initializer_list");
+	}
+};
+template <typename T, typename... Args>
+T* MakePtr(Args&&... args) {
+    return new T{std::forward<Args>(args)...};
+}
+
+void foo() {
+	// Output: Constructor with initializer_list
+	auto p = MakePtr<Test>(1, 2);
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate data-auto-animate-id="3">
+					<pre data-id="code-animation-2"><code data-trim data-line-numbers class="cpp"><script type="text/template">
+template <typename T>
+auto pop_last(std::vector<T>& v) {
+    assert(!v.empty());
+    auto last = std::move(v.back());
+    v.pop_back();
+    return last;
+}
+					</script></code></pre>
+				</section>
+				<section data-auto-animate data-auto-animate-id="3">
+					<pre data-id="code-animation-2"><code data-trim data-line-numbers=2,4|" class="cpp"><script type="text/template">
+template <typename T>
+T pop_last(std::vector<T>& v) {
+    assert(!v.empty());
+    T last = std::move(v.back());
+    v.pop_back();
+    return last;
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<pre><code data-trim data-line-numbers class="cpp"><script type="text/template">
+template <typename T>
+T sum(T a, T b)
+{
+    T res;
+    res = a + b;
+    return res;
+}
+					</script></code></pre>
+				</section>
+				<section>
+					<img src="img/vector_bool.png">
+				</section>
+				<section data-markdown>
+					Как бороться:
+					* Не забывать про initializer_list.
+					* Операторы могут возвращать прокси объекты.
+					* Страдать.
+				</section>
+				<section data-markdown>
+					Выводы:
+					* C++ полон сюрпризов.
+					* Настройте линтер(clang-tidy, ...)/статический анализатор.
+					* Пользуйтесь ASAN!
+				</section>
+				<section>
+					Вопросы?
+				</section>
+			</div>
+		</div>
+
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/markdown/markdown.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script>
+			// More info about initialization & config:
+			// - https://revealjs.com/initialization/
+			// - https://revealjs.com/config/
+			Reveal.initialize({
+				hash: true,
+				slideNumber: 'c/t',
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+			});
+		</script>
+	</body>
+</html>
